@@ -2,6 +2,16 @@
 
 All notable changes to the Wauldo Rust SDK.
 
+## [0.10.0] - 2026-04-30
+
+### Added
+- `src/agents.rs` and `src/memory.rs` modules — Tasks API client + agent memory bindings.
+- `tests/guard_test.rs` integration test.
+
+### Changed
+- Repository URL migrated to github.com/wauldoai.
+- README hero refresh + footer alignment with WAULDO_README_TEMPLATE.
+
 ## [0.8.0] - 2026-04-15
 
 ### Added
