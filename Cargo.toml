@@ -1,6 +1,6 @@
 [package]
 name = "wauldo"
-version = "0.1.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.70"
 authors = ["Wauldo Team"]
@@ -21,10 +21,12 @@ thiserror = "1"
 async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
+async-stream = "0.3"
 tracing = "0.1"
 regex = "1"
 
 [dev-dependencies]
 tokio-test = "0.4"
+wiremock = "0.6"
 
 

@@ -259,6 +259,43 @@ impl HttpClient {
         .await
     }
 
+    /// Verify text claims against source context -- POST /v1/fact-check
+    ///
+    /// Guard is a hallucination firewall: checks whether LLM output is
+    /// supported by source documents. Blocks wrong answers before users see them.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # async fn example() -> wauldo::Result<()> {
+    /// # let client = wauldo::HttpClient::localhost()?;
+    /// let result = client.guard(
+    ///     "Returns accepted within 60 days",
+    ///     "Our return policy: 14 days.",
+    ///     None,
+    /// ).await?;
+    /// if result.is_blocked() {
+    ///     println!("Hallucination caught: {:?}", result.claims[0].reason);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn guard(
+        &self,
+        text: impl Into<String>,
+        source_context: impl Into<String>,
+        mode: Option<&str>,
+    ) -> Result<GuardResponse> {
+        self.post(
+            "/v1/fact-check",
+            &GuardRequest {
+                text: text.into(),
+                source_context: source_context.into(),
+                mode: mode.map(|m| m.to_string()),
+            },
+        )
+        .await
+    }
+
     /// Create a stateful conversation helper using this client
     pub fn conversation(&self) -> Conversation {
         Conversation::new(self.clone())

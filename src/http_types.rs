@@ -186,7 +186,10 @@ pub struct RagQueryResponse {
 impl RagQueryResponse {
     /// Get confidence from audit (preferred) or legacy flat field
     pub fn confidence(&self) -> Option<f32> {
-        self.audit.as_ref().map(|a| a.confidence).or(self.confidence)
+        self.audit
+            .as_ref()
+            .map(|a| a.confidence)
+            .or(self.confidence)
     }
 
     /// Get grounded from audit (preferred) or legacy flat field
@@ -227,6 +230,63 @@ pub struct RagSource {
     pub chunk_id: Option<String>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+}
+
+// ── Guard (Fact-Check) ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GuardRequest {
+    pub text: String,
+    pub source_context: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// A single verified claim from the Guard response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardClaim {
+    pub text: String,
+    #[serde(default)]
+    pub claim_type: Option<String>,
+    pub supported: bool,
+    pub confidence: f32,
+    #[serde(default)]
+    pub confidence_label: Option<String>,
+    pub verdict: String,
+    pub action: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<String>,
+}
+
+/// Response from POST /v1/fact-check — the Guard verification API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardResponse {
+    pub verdict: String,
+    pub action: String,
+    pub hallucination_rate: f32,
+    pub mode: String,
+    pub total_claims: usize,
+    pub supported_claims: usize,
+    pub confidence: f32,
+    pub claims: Vec<GuardClaim>,
+    #[serde(default)]
+    pub mode_warning: Option<String>,
+    #[serde(default)]
+    pub processing_time_ms: Option<u64>,
+}
+
+impl GuardResponse {
+    /// True if the verdict allows the content through
+    pub fn is_safe(&self) -> bool {
+        self.verdict == "verified"
+    }
+
+    /// True if the content should be blocked
+    pub fn is_blocked(&self) -> bool {
+        self.action == "block"
+    }
 }
 
 // ── Orchestrator ────────────────────────────────────────────────────────

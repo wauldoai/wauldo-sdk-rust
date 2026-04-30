@@ -37,6 +37,12 @@ mod sse_parser;
 mod transport;
 mod types;
 
+// Wauldo Deploy — standalone clients for /v1/agents, /v1/memory,
+// /v1/a2a. Keep separate from HttpClient so they don't depend on
+// Guard/http_types which are undergoing pre-existing modifications.
+pub mod agents;
+pub mod memory;
+
 pub use client::AgentClient;
 pub use conversation::Conversation;
 pub use error::{Error, Result};
@@ -45,3 +51,11 @@ pub use http_config::HttpConfig;
 pub use http_types::*;
 pub use mock_client::MockHttpClient;
 pub use types::*;
+
+// Re-export the deployed-agents + tasks surface so callers can
+// `use wauldo::AgentsClient;` without reaching into `wauldo::agents`.
+pub use agents::{
+    AgentListResponse, AgentPagination, AgentRunResponse, AgentsClient, AgentsError, AgentsResult,
+    CreateAgentRequest, DeployedAgent, StateTransition, Task, TaskClaim, TaskStatus,
+    TaskVerification, UpdateAgentRequest, Verdict,
+};
