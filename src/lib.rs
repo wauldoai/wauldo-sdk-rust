@@ -41,6 +41,9 @@ mod types;
 // /v1/a2a. Keep separate from HttpClient so they don't depend on
 // Guard/http_types which are undergoing pre-existing modifications.
 pub mod agents;
+// Funnel #1 — audit log (read + export + RTBF). Same standalone shape
+// as memory and agents — no coupling to HttpClient.
+pub mod history;
 pub mod memory;
 
 pub use client::AgentClient;
