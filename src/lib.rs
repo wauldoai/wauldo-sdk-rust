@@ -45,6 +45,8 @@ pub mod agents;
 // as memory and agents — no coupling to HttpClient.
 pub mod history;
 pub mod memory;
+// Workflow Runtime — state-machine workflows (Step Functions style).
+pub mod workflows;
 
 pub use client::AgentClient;
 pub use conversation::Conversation;
@@ -58,7 +60,15 @@ pub use types::*;
 // Re-export the deployed-agents + tasks surface so callers can
 // `use wauldo::AgentsClient;` without reaching into `wauldo::agents`.
 pub use agents::{
-    AgentListResponse, AgentPagination, AgentRunResponse, AgentsClient, AgentsError, AgentsResult,
-    CreateAgentRequest, DeployedAgent, StateTransition, Task, TaskClaim, TaskStatus,
-    TaskVerification, UpdateAgentRequest, Verdict,
+    AgentListResponse, AgentPagination, AgentRevision, AgentRunResponse, AgentsClient, AgentsError,
+    AgentsResult, CreateAgentRequest, CreateRevisionRequest, CreateRevisionResponse, DeployedAgent,
+    ListRevisionsResponse, StateTransition, Task, TaskClaim, TaskStatus, TaskVerification,
+    UpdateAgentRequest, Verdict,
+};
+
+// Re-export the workflows surface so callers can
+// `use wauldo::WorkflowsClient;` without reaching into `wauldo::workflows`.
+pub use workflows::{
+    is_workflow_run_terminal, CreateWorkflowRequest, StartRunResponse, Workflow, WorkflowExecution,
+    WorkflowListResponse, WorkflowsClient, TERMINAL_WORKFLOW_STATUSES,
 };

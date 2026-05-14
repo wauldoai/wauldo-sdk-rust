@@ -139,6 +139,73 @@ pub struct A2aResponse {
     pub status: String,
 }
 
+// ─── Revisions (ECS-style versioning) ────────────────────────────────
+
+/// Immutable snapshot of an agent's `AgentContractV2` payload.
+///
+/// Each revision is content-addressed via `sha256` and identified by a
+/// monotone `rev` integer. Mirrors AWS ECS task-definition revisions:
+/// append-only, with O(1) rollback via [`AgentsClient::set_active_revision`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentRevision {
+    pub rev: u32,
+    pub sha256: String,
+    pub contract_json: String,
+    pub created_at: u64,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateRevisionRequest {
+    /// Full `AgentContractV2` JSON payload.
+    pub custom_preset: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// When `true` (default) the new revision becomes active immediately.
+    pub set_active: bool,
+}
+
+impl Default for CreateRevisionRequest {
+    fn default() -> Self {
+        Self {
+            custom_preset: serde_json::Value::Null,
+            message: None,
+            set_active: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRevisionResponse {
+    pub rev: u32,
+    pub sha256: String,
+    pub active_rev: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListRevisionsResponse {
+    pub revisions: Vec<AgentRevision>,
+    pub active_rev: u32,
+    pub head_rev: u32,
+    pub count: usize,
+}
+
+/// Result of [`AgentsClient::share_task`] / [`AgentsClient::unshare_task`].
+///
+/// `expires_at` is epoch milliseconds, or `None` for paid tenants
+/// (no expiration). Free-tier shares default to a 30-day TTL ; once
+/// elapsed, the public `GET /v1/runs/<share_id>` returns 404.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShareResponse {
+    pub share_id: String,
+    pub url: String,
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+}
+
 // ─── Tasks + verification types ──────────────────────────────────────
 
 /// Verification verdict returned on completed tasks. Matches the server's
@@ -455,6 +522,74 @@ impl AgentsClient {
         Ok(())
     }
 
+    // ── Revisions (ECS-style versioning) ─────────────────────────
+
+    /// `POST /v1/agents/:id/revisions` — mint an immutable revision.
+    ///
+    /// The server validates `custom_preset` (size, depth, states, cycle,
+    /// tools, quota) and stores an immutable snapshot keyed by SHA-256.
+    /// When `set_active` is `true` (default) the new revision becomes
+    /// the agent's live revision; `false` stages it for review.
+    pub async fn create_revision(
+        &self,
+        agent_id: &str,
+        req: CreateRevisionRequest,
+    ) -> AgentsResult<CreateRevisionResponse> {
+        self.request::<CreateRevisionResponse>(
+            Method::POST,
+            &format!("/v1/agents/{agent_id}/revisions"),
+            Some(&req),
+            None,
+        )
+        .await
+        .map(|o| o.expect("server returned empty body for create_revision"))
+    }
+
+    /// `GET /v1/agents/:id/revisions` — list revisions newest-first.
+    pub async fn list_revisions(&self, agent_id: &str) -> AgentsResult<ListRevisionsResponse> {
+        self.request::<ListRevisionsResponse>(
+            Method::GET,
+            &format!("/v1/agents/{agent_id}/revisions"),
+            Option::<&()>::None,
+            None,
+        )
+        .await
+        .map(|o| o.expect("server returned empty body for list_revisions"))
+    }
+
+    /// `GET /v1/agents/:id/revisions/:rev` — fetch one revision verbatim.
+    pub async fn get_revision(&self, agent_id: &str, rev: u32) -> AgentsResult<AgentRevision> {
+        self.request::<AgentRevision>(
+            Method::GET,
+            &format!("/v1/agents/{agent_id}/revisions/{rev}"),
+            Option::<&()>::None,
+            None,
+        )
+        .await
+        .map(|o| o.expect("server returned empty body for get_revision"))
+    }
+
+    /// `PATCH /v1/agents/:id/active-revision` — O(1) rollback / promotion.
+    ///
+    /// No LLM cost — the revision is already validated and stored. Use
+    /// this to roll back to a previous good revision when the current
+    /// one breaks in production.
+    pub async fn set_active_revision(
+        &self,
+        agent_id: &str,
+        rev: u32,
+    ) -> AgentsResult<DeployedAgent> {
+        let body = serde_json::json!({ "rev": rev });
+        self.request::<DeployedAgent>(
+            Method::PATCH,
+            &format!("/v1/agents/{agent_id}/active-revision"),
+            Some(&body),
+            None,
+        )
+        .await
+        .map(|o| o.expect("server returned empty body for set_active_revision"))
+    }
+
     // ── Runs ─────────────────────────────────────────────────────
 
     pub async fn run(
@@ -561,6 +696,48 @@ impl AgentsClient {
             .request(
                 Method::DELETE,
                 &format!("/v1/tasks/{task_id}"),
+                Option::<&()>::None,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    // ── Shareable runs ──────────────────────────────────────────────
+
+    /// `POST /v1/tasks/:id/share` — publish a run as a public URL.
+    ///
+    /// Idempotent : calling on an already-shared task returns the
+    /// existing [`ShareResponse`] without bumping the per-tenant cap.
+    /// The returned `url` (form `https://wauldo.com/r/<id>`) can be
+    /// pasted anywhere — anyone with the link sees the verdict +
+    /// claims + sources + timeline through a strict-whitelist
+    /// projection (no `custom_preset` / `wauldo_toml` / system prompt /
+    /// tool args ever leave the tenant).
+    ///
+    /// Free-tier tenants get a 30-day TTL ; paid tenants get
+    /// `expires_at = None` (no expiration).
+    pub async fn share_task(&self, task_id: &str) -> AgentsResult<ShareResponse> {
+        self.request::<ShareResponse>(
+            Method::POST,
+            &format!("/v1/tasks/{task_id}/share"),
+            Some(&serde_json::json!({})),
+            None,
+        )
+        .await
+        .map(|o| o.expect("server returned empty body for share_task"))
+    }
+
+    /// `DELETE /v1/tasks/:id/share` — make a published run private again.
+    ///
+    /// Idempotent : calling on a never-published task returns `Ok(())`.
+    /// Subsequent `GET /v1/runs/<share_id>` for the cleared id returns
+    /// 404.
+    pub async fn unshare_task(&self, task_id: &str) -> AgentsResult<()> {
+        let _: Option<serde_json::Value> = self
+            .request(
+                Method::DELETE,
+                &format!("/v1/tasks/{task_id}/share"),
                 Option::<&()>::None,
                 None,
             )
