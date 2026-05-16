@@ -242,6 +242,31 @@ impl WorkflowsClient {
             .map(|o| o.unwrap_or(WorkflowListResponse { workflows: vec![] }))
     }
 
+    /// `PATCH /v1/workflows/:id` — replace the workflow definition in place.
+    ///
+    /// Body shape is identical to [`create`] (`CreateWorkflowRequest`). The
+    /// server keeps the workflow id, tenant_id, and created_at ; refreshes
+    /// name/description/start_at/states ; bumps updated_at and the monotonic
+    /// version int. Same validations as create — cycles, transition targets,
+    /// choice operators. Returns 200 with the updated workflow.
+    pub async fn update(
+        &self,
+        workflow_id: &str,
+        req: CreateWorkflowRequest,
+    ) -> AgentsResult<Workflow> {
+        let env: WorkflowEnvelope = self
+            .request::<WorkflowEnvelope>(
+                Method::PATCH,
+                &format!("/v1/workflows/{workflow_id}"),
+                Some(&req),
+            )
+            .await?
+            .ok_or_else(|| {
+                AgentsError::InvalidInput("server returned empty body for update".into())
+            })?;
+        Ok(env.workflow)
+    }
+
     /// `GET /v1/workflows/:id`
     pub async fn get(&self, workflow_id: &str) -> AgentsResult<Workflow> {
         let env: WorkflowEnvelope = self
