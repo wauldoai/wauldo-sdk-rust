@@ -264,6 +264,12 @@ impl HttpClient {
     /// Guard is a hallucination firewall: checks whether LLM output is
     /// supported by source documents. Blocks wrong answers before users see them.
     ///
+    /// When `query` is provided, the response carries a `relevance` block
+    /// scoring how well `text` addresses the question — fully decoupled from
+    /// the factual verdict (verified + off_topic is a valid combination).
+    /// `relevance_mode`: only `"fast"` (embedding cosine) is currently
+    /// supported server-side; requires `query`.
+    ///
     /// # Example
     /// ```no_run
     /// # async fn example() -> wauldo::Result<()> {
@@ -272,25 +278,91 @@ impl HttpClient {
     ///     "Returns accepted within 60 days",
     ///     "Our return policy: 14 days.",
     ///     None,
+    ///     Some("What is the return window?"),
+    ///     None,
     /// ).await?;
     /// if result.is_blocked() {
     ///     println!("Hallucination caught: {:?}", result.claims[0].reason);
     /// }
+    /// if let Some(relevance) = &result.relevance {
+    ///     println!("Relevance: {} ({:.2})", relevance.verdict, relevance.score);
+    /// }
     /// # Ok(())
     /// # }
     /// ```
+    pub async fn fact_check(
+        &self,
+        text: impl Into<String>,
+        source_context: impl Into<String>,
+        mode: Option<&str>,
+        query: Option<&str>,
+        relevance_mode: Option<&str>,
+    ) -> Result<GuardResponse> {
+        let text = text.into();
+        let source_context = source_context.into();
+        if text.is_empty() {
+            return Err(Error::validation_field("text cannot be empty", "text"));
+        }
+        if source_context.is_empty() {
+            return Err(Error::validation_field(
+                "source_context is required for verification",
+                "source_context",
+            ));
+        }
+        if let Some(m) = mode {
+            if !matches!(m, "lexical" | "hybrid" | "semantic") {
+                return Err(Error::validation_field(
+                    "mode must be one of: lexical, hybrid, semantic",
+                    "mode",
+                ));
+            }
+        }
+        if relevance_mode.is_some() && query.is_none() {
+            return Err(Error::validation_field(
+                "relevance_mode requires query to be provided",
+                "relevance_mode",
+            ));
+        }
+        self.post(
+            "/v1/fact-check",
+            &GuardRequest {
+                text,
+                source_context,
+                mode: mode.map(|m| m.to_string()),
+                query: query.map(|q| q.to_string()),
+                relevance_mode: relevance_mode.map(|r| r.to_string()),
+            },
+        )
+        .await
+    }
+
+    /// Alias for [`HttpClient::fact_check`], kept for parity with the other
+    /// SDKs (all expose `guard`).
     pub async fn guard(
         &self,
         text: impl Into<String>,
         source_context: impl Into<String>,
         mode: Option<&str>,
+        query: Option<&str>,
+        relevance_mode: Option<&str>,
     ) -> Result<GuardResponse> {
+        self.fact_check(text, source_context, mode, query, relevance_mode)
+            .await
+    }
+
+    /// Validate inline citations against sources -- POST /v1/verify
+    pub async fn verify_citation(
+        &self,
+        text: impl Into<String>,
+        sources: Option<Vec<SourceChunk>>,
+        threshold: Option<f64>,
+    ) -> Result<VerifyCitationResponse> {
         self.post(
-            "/v1/fact-check",
-            &GuardRequest {
+            "/v1/verify",
+            &VerifyCitationRequest {
                 text: text.into(),
-                source_context: source_context.into(),
-                mode: mode.map(|m| m.to_string()),
+                sources,
+                threshold,
             },
         )
         .await
@@ -305,5 +377,56 @@ impl HttpClient {
     pub async fn rag_ask(&self, question: &str, text: &str) -> Result<String> {
         self.rag_upload(text, None).await?;
         Ok(self.rag_query(question, None).await?.answer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client() -> HttpClient {
+        HttpClient::new(HttpConfig::new("http://localhost:3000").with_api_key("k")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn fact_check_empty_source_context_is_validation_error() {
+        // Validation fires before any network call.
+        let err = client()
+            .fact_check("Some claim.", "", None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation { .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn fact_check_invalid_mode_is_validation_error() {
+        let err = client()
+            .fact_check("Some claim.", "ctx", Some("banana"), None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation { .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn fact_check_relevance_mode_without_query_is_validation_error() {
+        let err = client()
+            .fact_check("Some claim.", "ctx", None, None, Some("fast"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Validation { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn guard_request_omits_relevance_fields_when_none() {
+        let req = GuardRequest {
+            text: "claim".into(),
+            source_context: "ctx".into(),
+            mode: None,
+            query: None,
+            relevance_mode: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("query").is_none());
+        assert!(json.get("relevance_mode").is_none());
     }
 }

@@ -237,9 +237,35 @@ pub struct RagSource {
 #[derive(Debug, Clone, Serialize)]
 pub struct GuardRequest {
     pub text: String,
+    /// Required — the server's `/v1/fact-check` rejects a missing context
+    /// with HTTP 400.
     pub source_context: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Original user question. When provided, the response includes a
+    /// `relevance` block — decoupled from the factual verdict.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// Relevance scoring mode. Only "fast" is currently supported
+    /// server-side. Requires `query`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relevance_mode: Option<String>,
+}
+
+/// Relevance of the answer to the user query — decoupled from factuality.
+///
+/// A response can be fully verified against sources AND off-topic for the
+/// question asked. This block never influences `verdict` / `confidence`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelevanceResult {
+    /// Raw cosine similarity between query and text embeddings (0.0-1.0).
+    /// Model-specific scale — interpret through `verdict`, not absolute value.
+    pub score: f64,
+    /// relevant | partial | off_topic
+    pub verdict: String,
+    /// Explanation (only populated by future judge modes)
+    #[serde(default)]
+    pub rationale: Option<String>,
 }
 
 /// A single verified claim from the Guard response
@@ -273,6 +299,14 @@ pub struct GuardResponse {
     pub claims: Vec<GuardClaim>,
     #[serde(default)]
     pub mode_warning: Option<String>,
+    /// Only present when `query` was provided AND computable. Decoupled
+    /// from the factual verdict.
+    #[serde(default)]
+    pub relevance: Option<RelevanceResult>,
+    /// Why relevance could not be computed. Never set when `relevance`
+    /// is present.
+    #[serde(default)]
+    pub relevance_warning: Option<String>,
     #[serde(default)]
     pub processing_time_ms: Option<u64>,
 }
@@ -287,6 +321,47 @@ impl GuardResponse {
     pub fn is_blocked(&self) -> bool {
         self.action == "block"
     }
+}
+
+// ── Citation verification (POST /v1/verify) ─────────────────────────────
+
+/// A source chunk to validate citations against.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceChunk {
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyCitationRequest {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<SourceChunk>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f64>,
+}
+
+/// One citation validation result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CitationDetail {
+    pub citation: String,
+    pub source_name: String,
+    pub is_valid: bool,
+}
+
+/// Response from POST /v1/verify — citation validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyCitationResponse {
+    pub citation_ratio: f64,
+    pub has_sufficient_citations: bool,
+    pub sentence_count: usize,
+    pub citation_count: usize,
+    pub uncited_sentences: Vec<String>,
+    #[serde(default)]
+    pub citations: Option<Vec<CitationDetail>>,
+    #[serde(default)]
+    pub phantom_count: Option<usize>,
+    pub processing_time_ms: u64,
 }
 
 // ── Orchestrator ────────────────────────────────────────────────────────

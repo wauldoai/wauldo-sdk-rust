@@ -117,10 +117,29 @@ let result = client.guard(
     "Returns are accepted within 60 days.",
     "Our policy allows returns within 14 days.",
     Some("lexical"),
+    None,
+    None,
 ).await?;
 println!("Verdict: {}", result.verdict);        // "rejected"
 println!("Action: {}", result.action);           // "block"
 println!("Reason: {:?}", result.claims[0].reason); // Some("numerical_mismatch")
+```
+
+Optionally score how well the text answers the original question — decoupled
+from the factual verdict (a verified answer can still be off-topic):
+
+```rust
+let result = client.fact_check(
+    "Rust was first released in 2010 by Mozilla Research.",
+    "Rust is a systems language released in 2010 by Mozilla Research.",
+    Some("lexical"),
+    Some("What year was Rust released?"),
+    None, // relevance_mode defaults to "fast" server-side
+).await?;
+println!("Verdict: {}", result.verdict); // "verified"
+if let Some(relevance) = &result.relevance {
+    println!("Relevance: {} ({:.2})", relevance.verdict, relevance.score);
+}
 ```
 
 ### Deployed Agents — create, run, stream

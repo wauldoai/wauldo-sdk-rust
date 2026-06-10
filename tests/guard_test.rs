@@ -23,6 +23,8 @@ fn verified_response() -> GuardResponse {
             evidence: None,
         }],
         mode_warning: None,
+        relevance: None,
+        relevance_warning: None,
         processing_time_ms: Some(0),
     }
 }
@@ -48,6 +50,8 @@ fn rejected_response() -> GuardResponse {
             evidence: None,
         }],
         mode_warning: None,
+        relevance: None,
+        relevance_warning: None,
         processing_time_ms: Some(0),
     }
 }
@@ -86,6 +90,8 @@ fn weak_response() -> GuardResponse {
             },
         ],
         mode_warning: None,
+        relevance: None,
+        relevance_warning: None,
         processing_time_ms: None,
     }
 }
@@ -152,4 +158,49 @@ fn test_guard_response_from_api_json() {
     assert!(resp.is_blocked());
     assert!(!resp.is_safe());
     assert_eq!(resp.claims[0].reason.as_deref(), Some("numerical_mismatch"));
+}
+
+#[test]
+fn test_guard_response_parses_relevance_block() {
+    let json = r#"{
+        "verdict": "verified",
+        "action": "allow",
+        "hallucination_rate": 0.0,
+        "mode": "lexical",
+        "total_claims": 1,
+        "supported_claims": 1,
+        "confidence": 0.9,
+        "claims": [],
+        "relevance": { "score": 0.74, "verdict": "off_topic" }
+    }"#;
+    let resp: GuardResponse = serde_json::from_str(json).expect("parse API response");
+    // Decoupled axes: factually verified AND off-topic is a valid state.
+    assert!(resp.is_safe());
+    let relevance = resp.relevance.expect("relevance block present");
+    assert_eq!(relevance.verdict, "off_topic");
+    assert_eq!(relevance.score, 0.74);
+    assert!(relevance.rationale.is_none());
+    assert!(resp.relevance_warning.is_none());
+}
+
+#[test]
+fn test_guard_response_parses_relevance_warning() {
+    let json = r#"{
+        "verdict": "verified",
+        "action": "allow",
+        "hallucination_rate": 0.0,
+        "mode": "lexical",
+        "total_claims": 1,
+        "supported_claims": 1,
+        "confidence": 0.9,
+        "claims": [],
+        "relevance_warning": "relevance not computed: embeddings unavailable"
+    }"#;
+    let resp: GuardResponse = serde_json::from_str(json).expect("parse API response");
+    assert!(resp.relevance.is_none());
+    assert!(resp
+        .relevance_warning
+        .as_deref()
+        .unwrap()
+        .contains("embeddings unavailable"));
 }

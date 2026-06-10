@@ -2,6 +2,31 @@
 
 All notable changes to the Wauldo Rust SDK.
 
+## [0.16.0] - 2026-06-10
+
+### Added
+- `fact_check` / `guard`: optional `query` and `relevance_mode` args — when `query` is provided, the response carries a `relevance` block (`RelevanceResult`: `score`, `verdict` relevant/partial/off_topic, `rationale`) scoring how well the text answers the question, fully decoupled from the factual verdict. `relevance_warning` explains when relevance could not be computed. Only `relevance_mode = Some("fast")` is supported server-side today.
+
+### Breaking
+- `fact_check` / `guard` signatures gained two trailing `Option<&str>` parameters (`query`, `relevance_mode`). Existing callers must append `None, None`.
+
+## [0.15.1] - 2026-06-07
+
+### Fixed
+- `fact_check`: `source_context` is now **required** (`impl Into<String>`, was `Option<String>`). The server rejects a missing context with 400, so the optional form always failed at runtime. Surfaced by a live dogfooding pass.
+
+### Added
+- Client-side validation on `fact_check` (empty `text` / `source_context`, invalid `mode`) — returns `Error::Validation` instead of a server round-trip.
+
+## [0.15.0] - 2026-06-07
+
+### Added
+- `HttpClient::fact_check(text, source_context, mode)` — canonical name for the `/v1/fact-check` verify call, matching the `fact_check` naming used across the Python and TypeScript SDKs. `source_context` is now `Option<String>` (the server accepts a missing context).
+- `HttpClient::verify_citation(text, sources, threshold)` — validate inline citations via `POST /v1/verify`. Closes the cross-SDK parity gap (was Python-only). New types `VerifyCitationResponse`, `CitationDetail`, `SourceChunk`, `VerifyCitationRequest`.
+
+### Changed
+- `guard()` is now a deprecated back-compat alias delegating to `fact_check()`.
+
 ## [0.14.0] - 2026-05-16
 
 ### Added
