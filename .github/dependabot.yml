@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Keep the pinned action SHAs current — Dependabot bumps the SHA (and the
+  # trailing version comment) via PR, so we get supply-chain hardening AND
+  # updates instead of choosing one.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
