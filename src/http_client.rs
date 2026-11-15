@@ -185,13 +185,33 @@ impl HttpClient {
         filename: Option<String>,
         timeout_ms: Option<u64>,
     ) -> Result<RagUploadResponse> {
+        self.rag_upload_with_options(
+            content,
+            filename,
+            RagUploadOptions {
+                timeout_ms,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Upload document for RAG with options: the PII policy
+    /// ([`PiiPolicy::Keep`] stores contact details as sent) and a timeout.
+    pub async fn rag_upload_with_options(
+        &self,
+        content: impl Into<String>,
+        filename: Option<String>,
+        options: RagUploadOptions,
+    ) -> Result<RagUploadResponse> {
         self.post_with_timeout(
             "/v1/upload",
-            &RagUploadRequest {
+            &RagUploadBody {
                 content: content.into(),
                 filename,
+                pii_policy: options.pii_policy,
             },
-            timeout_ms,
+            options.timeout_ms,
         )
         .await
     }

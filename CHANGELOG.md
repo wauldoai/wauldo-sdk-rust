@@ -2,6 +2,17 @@
 
 All notable changes to the Wauldo Rust SDK.
 
+## [0.17.0] - 2026-11-15
+
+### Added
+- `rag_upload_with_options` with `RagUploadOptions { pii_policy, timeout_ms }` and the `PiiPolicy` enum (`Redact`, the server default, or `Keep` to store contact details as sent). `RagUploadRequest` is unchanged.
+
+### Fixed
+- `chat_stream`: a failure reported by the server mid-stream (`data: {"error": {...}}`) is now delivered on the channel as `Error::Server` (code `0`: the HTTP status was already 200) with the server's message and error body, and the stream stops. It was skipped, so the stream ended as an empty, apparently successful answer.
+
+### Removed
+- **Breaking:** `agents_md` and `mcp_json` are removed from agent create/update and from the agent type. The server never used them and now ignores them; requests that still send them are accepted unchanged.
+
 ## [0.16.0] - 2026-06-10
 
 ### Added

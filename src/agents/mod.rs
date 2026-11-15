@@ -17,8 +17,6 @@
 //!     name: "sdr-bot".into(),
 //!     wauldo_toml: "[agent]\nname = 'sdr-bot'\n[model]\nprovider = 'openrouter'\nname = 'qwen'".into(),
 //!     description: "Outbound sales".into(),
-//!     agents_md: None,
-//!     mcp_json: None,
 //!     preset: None,
 //! }).await?;
 //! let run = agents.run(&agent.id, "Qualify acme.com", None).await?;

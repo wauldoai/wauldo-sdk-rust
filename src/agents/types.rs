@@ -39,10 +39,6 @@ pub struct DeployedAgent {
     #[serde(default)]
     pub description: String,
     pub wauldo_toml: String,
-    #[serde(default)]
-    pub agents_md: Option<String>,
-    #[serde(default)]
-    pub mcp_json: Option<String>,
     pub model_provider: String,
     pub model_name: String,
     #[serde(default)]
@@ -58,10 +54,6 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agents_md: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_json: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
 }
 
@@ -71,10 +63,6 @@ pub struct UpdateAgentRequest {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wauldo_toml: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agents_md: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_json: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
 }

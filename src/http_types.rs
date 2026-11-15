@@ -147,6 +147,36 @@ pub struct RagUploadRequest {
     pub filename: Option<String>,
 }
 
+/// What happens to personal data (emails, phone numbers…) in an upload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PiiPolicy {
+    /// Replace it with placeholders such as `[REDACTED_EMAIL]` (the server default).
+    Redact,
+    /// Store the text as sent — e.g. a support address answers must quote.
+    Keep,
+}
+
+/// Options for [`crate::HttpClient::rag_upload_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct RagUploadOptions {
+    /// `None`: the server default, [`PiiPolicy::Redact`].
+    pub pii_policy: Option<PiiPolicy>,
+    /// Per-request timeout override, in milliseconds.
+    pub timeout_ms: Option<u64>,
+}
+
+/// Wire body of `POST /v1/upload` with options; [`RagUploadRequest`] stays
+/// as it was so code that builds it keeps compiling.
+#[derive(Debug, Serialize)]
+pub(crate) struct RagUploadBody {
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pii_policy: Option<PiiPolicy>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RagUploadResponse {
     pub document_id: String,
@@ -420,5 +450,33 @@ impl ChatMessage {
             content: Some(content.into()),
             name: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod pii_policy_tests {
+    use super::{PiiPolicy, RagUploadBody};
+
+    #[test]
+    fn test_upload_body_sends_pii_policy_only_when_set() {
+        let keep = RagUploadBody {
+            content: "Write to help@acme.example".into(),
+            filename: None,
+            pii_policy: Some(PiiPolicy::Keep),
+        };
+        let json = serde_json::to_value(&keep).expect("serializes");
+        assert_eq!(json["pii_policy"], "keep");
+
+        let unset = RagUploadBody {
+            content: "x".into(),
+            filename: None,
+            pii_policy: None,
+        };
+        let json = serde_json::to_value(&unset).expect("serializes");
+        assert!(json.get("pii_policy").is_none(), "{json}");
+        assert_eq!(
+            serde_json::to_value(PiiPolicy::Redact).expect("ok"),
+            "redact"
+        );
     }
 }
