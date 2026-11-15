@@ -1,7 +1,7 @@
 <h1 align="center">Wauldo Rust SDK</h1>
 
 <p align="center">
-  <strong>Verified AI answers from your documents — or no answer at all.</strong>
+  <strong>Verified AI answers from your documents — with the sources to prove it.</strong>
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <b>0% hallucination</b> &nbsp;|&nbsp; 83% accuracy &nbsp;|&nbsp; 61 eval tasks &nbsp;|&nbsp; 14 LLMs tested
+  Sources on every answer &nbsp;|&nbsp; claim-by-claim fact-check &nbsp;|&nbsp; <a href="https://wauldo.com/benchmarks">public weekly benchmarks</a>
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
   <a href="https://wauldo.com/demo">Demo</a> &bull;
   <a href="https://wauldo.com/docs">Docs</a> &bull;
   <a href="https://rapidapi.com/binnewzzin/api/smart-rag-api">Free API Key</a> &bull;
-  <a href="https://dev.to/wauldo/how-we-achieved-0-hallucination-rate-in-our-rag-api-with-benchmarks-4g54">Benchmarks</a>
+  <a href="https://wauldo.com/benchmarks">Benchmarks</a>
 </p>
 
 ---
@@ -55,6 +55,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+> Got your key from RapidAPI? Use the RapidAPI host instead — see [RapidAPI](#rapidapi).
 
 ```
 Output:
@@ -251,18 +253,20 @@ match client.chat(req).await {
 
 ## RapidAPI
 
+Keys from the free RapidAPI plan work on the RapidAPI host, not on `api.wauldo.com` (Enterprise keys):
+
 ```rust
-let config = HttpConfig::new("https://api.wauldo.com")
+let config = HttpConfig::new("https://smart-rag-api.p.rapidapi.com")
     .with_header("X-RapidAPI-Key", "YOUR_RAPIDAPI_KEY")
     .with_header("X-RapidAPI-Host", "smart-rag-api.p.rapidapi.com");
 let client = HttpClient::new(config)?;
 ```
 
-Free tier (300 req/month): [RapidAPI](https://rapidapi.com/binnewzzin/api/smart-rag-api)
+Free tier (500 verifications/month): [RapidAPI](https://rapidapi.com/binnewzzin/api/smart-rag-api)
 
 ---
 
-[Website](https://wauldo.com) | [Docs](https://wauldo.com/docs) | [Demo](https://wauldo.com/demo) | [Benchmarks](https://dev.to/wauldo/how-we-achieved-0-hallucination-rate-in-our-rag-api-with-benchmarks-4g54)
+[Website](https://wauldo.com) | [Docs](https://wauldo.com/docs) | [Demo](https://wauldo.com/demo) | [Benchmarks](https://wauldo.com/benchmarks)
 
 ## Contributing
 

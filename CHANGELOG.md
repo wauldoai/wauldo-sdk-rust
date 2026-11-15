@@ -2,6 +2,11 @@
 
 All notable changes to the Wauldo Rust SDK.
 
+## [0.17.1] - 2026-11-15
+
+### Changed
+- README and package metadata: the RapidAPI example now uses the RapidAPI host (a free-plan key does not work on `api.wauldo.com`), the free tier is 500 verifications/month, claims that could not be checked were removed, and benchmarks link to the public weekly page. No code change.
+
 ## [0.17.0] - 2026-11-15
 
 ### Added

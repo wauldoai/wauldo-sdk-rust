@@ -1,6 +1,6 @@
 [package]
 name = "wauldo"
-version = "0.17.0"
+version = "0.17.1"
 edition = "2021"
 rust-version = "1.70"
 authors = ["Wauldo Team"]
@@ -10,7 +10,7 @@ repository = "https://github.com/wauldoai/wauldo-sdk-rust"
 documentation = "https://docs.rs/wauldo"
 homepage = "https://wauldo.com"
 readme = "README.md"
-keywords = ["ai", "llm", "openai", "privacy", "gdpr"]
+keywords = ["ai", "llm", "rag", "fact-checking", "openai"]
 categories = ["api-bindings", "asynchronous", "web-programming::http-client"]
 
 [dependencies]
