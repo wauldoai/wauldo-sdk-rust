@@ -2,6 +2,14 @@
 
 use crate::error::Error;
 use std::collections::HashMap;
+use std::time::Duration;
+
+/// Longest silence tolerated on `HttpClient::chat_stream` before it is treated
+/// as dead. The stream has no total timeout: it stays open as long as the work
+/// runs, and the server sends a keep-alive every 15 s, so 45 s is three missed
+/// ones. `AgentsClient::stream_task` has its own bound and recovery
+/// (`agents::STREAM_IDLE_TIMEOUT`).
+pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Configuration for HTTP client
 #[derive(Clone)]
@@ -85,7 +93,10 @@ impl HttpConfig {
         self
     }
 
-    /// Set the request timeout in seconds
+    /// Set the request timeout in seconds.
+    ///
+    /// `chat_stream` is not bounded by it: a stream ends when the server
+    /// closes it, or with `Error::Timeout` after 45 s without any data.
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
         self

@@ -2,7 +2,7 @@
 
 use crate::conversation::Conversation;
 use crate::error::{Error, Result};
-use crate::http_config::HttpConfig;
+use crate::http_config::{HttpConfig, STREAM_IDLE_TIMEOUT};
 use crate::http_types::*;
 use crate::retry::RetryConfig;
 use crate::sse_parser::parse_sse_stream;
@@ -13,6 +13,8 @@ use tokio::sync::mpsc;
 #[derive(Clone)]
 pub struct HttpClient {
     pub(crate) client: reqwest::Client,
+    /// For `chat_stream`: no total timeout, only `STREAM_IDLE_TIMEOUT`.
+    pub(crate) stream_client: reqwest::Client,
     pub(crate) base_url: String,
     pub(crate) retry_config: RetryConfig,
     pub(crate) on_request: Option<fn(&str, &str)>,
@@ -45,11 +47,18 @@ impl HttpClient {
         }
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
+            .default_headers(headers.clone())
+            .build()
+            .map_err(|e| Error::connection(format!("HTTP client error: {}", e)))?;
+        // A total timeout would cut a stream that is still alive.
+        let stream_client = reqwest::Client::builder()
+            .read_timeout(STREAM_IDLE_TIMEOUT)
             .default_headers(headers)
             .build()
             .map_err(|e| Error::connection(format!("HTTP client error: {}", e)))?;
         Ok(Self {
             client,
+            stream_client,
             base_url: config.base_url,
             retry_config: RetryConfig {
                 max_retries: config.max_retries,
@@ -100,6 +109,10 @@ impl HttpClient {
     }
 
     /// Chat completion with SSE streaming -- POST /v1/chat/completions
+    ///
+    /// The stream is not bounded by `timeout_secs`. If nothing arrives for
+    /// 45 s (not even a keep-alive), the channel yields `Error::Timeout`
+    /// and closes.
     pub async fn chat_stream(
         &self,
         request: ChatRequest,
@@ -112,7 +125,7 @@ impl HttpClient {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let start = std::time::Instant::now();
         let resp = self
-            .client
+            .stream_client
             .post(&url)
             .json(&req)
             .send()
@@ -198,22 +211,24 @@ impl HttpClient {
 
     /// Upload document for RAG with options: the PII policy
     /// ([`PiiPolicy::Keep`] stores contact details as sent) and a timeout.
+    ///
+    /// The request is 10 MB at most, counted in UTF-8 bytes with the file
+    /// name: a larger one is refused with [`Error::Validation`] before
+    /// sending (this applies to [`Self::rag_upload`] too).
     pub async fn rag_upload_with_options(
         &self,
         content: impl Into<String>,
         filename: Option<String>,
         options: RagUploadOptions,
     ) -> Result<RagUploadResponse> {
-        self.post_with_timeout(
-            "/v1/upload",
-            &RagUploadBody {
-                content: content.into(),
-                filename,
-                pii_policy: options.pii_policy,
-            },
-            options.timeout_ms,
-        )
-        .await
+        let body = RagUploadBody {
+            content: content.into(),
+            filename,
+            pii_policy: options.pii_policy,
+        };
+        crate::upload_file::check_text_upload_size(&body)?;
+        self.post_with_timeout("/v1/upload", &body, options.timeout_ms)
+            .await
     }
 
     /// Query RAG -- POST /v1/query
@@ -222,17 +237,11 @@ impl HttpClient {
         query: impl Into<String>,
         top_k: Option<usize>,
     ) -> Result<RagQueryResponse> {
-        self.post(
-            "/v1/query",
-            &RagQueryRequest {
-                query: query.into(),
-                top_k,
-                debug: None,
-                stream: None,
-                quality_mode: None,
-            },
-        )
-        .await
+        let options = RagQueryOptions {
+            top_k,
+            ..Default::default()
+        };
+        self.rag_query_with_options(query, options).await
     }
 
     /// Query RAG with debug mode — returns retrieval funnel diagnostics
@@ -241,17 +250,23 @@ impl HttpClient {
         query: impl Into<String>,
         top_k: Option<usize>,
     ) -> Result<RagQueryResponse> {
-        self.post(
-            "/v1/query",
-            &RagQueryRequest {
-                query: query.into(),
-                top_k,
-                debug: Some(true),
-                stream: None,
-                quality_mode: None,
-            },
-        )
-        .await
+        let options = RagQueryOptions {
+            top_k,
+            debug: true,
+            ..Default::default()
+        };
+        self.rag_query_with_options(query, options).await
+    }
+
+    /// Query RAG with every option -- POST /v1/query: `top_k`, `debug` and
+    /// `quality_mode` (`"fast"`, `"balanced"` or `"premium"`).
+    pub async fn rag_query_with_options(
+        &self,
+        query: impl Into<String>,
+        options: RagQueryOptions,
+    ) -> Result<RagQueryResponse> {
+        self.post("/v1/query", &rag_query_body(query.into(), options))
+            .await
     }
 
     /// Execute orchestrator (best agent) -- POST /v1/orchestrator/execute
@@ -400,12 +415,63 @@ impl HttpClient {
     }
 }
 
+/// Wire body of `POST /v1/query`: `debug` is sent only when set.
+fn rag_query_body(query: String, options: RagQueryOptions) -> RagQueryRequest {
+    RagQueryRequest {
+        query,
+        top_k: options.top_k,
+        debug: options.debug.then_some(true),
+        stream: None,
+        quality_mode: options.quality_mode,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn client() -> HttpClient {
         HttpClient::new(HttpConfig::new("http://localhost:3000").with_api_key("k")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn rag_query_with_options_sends_quality_mode_and_debug() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/query"))
+            .and(body_json(serde_json::json!({
+                "query": "What are the payment terms?",
+                "top_k": 3,
+                "debug": true,
+                "quality_mode": "premium",
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"answer": "30 days", "sources": []})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = HttpClient::new(HttpConfig::new(server.uri())).unwrap();
+        let options = RagQueryOptions {
+            top_k: Some(3),
+            debug: true,
+            quality_mode: Some("premium".into()),
+        };
+        let resp = client
+            .rag_query_with_options("What are the payment terms?", options)
+            .await
+            .expect("query");
+        assert_eq!(resp.answer, "30 days");
+    }
+
+    #[test]
+    fn rag_query_body_leaves_unset_options_out() {
+        let body = rag_query_body("q".into(), RagQueryOptions::default());
+        let json = serde_json::to_value(&body).expect("serializes");
+        assert_eq!(json, serde_json::json!({"query": "q"}));
     }
 
     #[tokio::test]

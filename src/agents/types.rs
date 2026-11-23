@@ -4,14 +4,25 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::verification::{RaceResult, TaskVerification};
+
 /// Max bytes the client will accept from a single response. Protects
 /// against hostile or misbehaving servers that try to stream gigabytes.
 pub const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 
-/// Errors returned by `AgentsClient` / `MemoryClient`.
+/// Errors returned by `AgentsClient` / `MemoryClient` / `WorkflowsClient`.
+///
+/// `#[non_exhaustive]`: a `match` needs a wildcard arm, so a variant added
+/// later is not a breaking change.
+///
+/// Converts into the crate's [`crate::Error`] (`?` works in a function that
+/// returns `wauldo::Result`): `Status` becomes `Error::Server` with the HTTP
+/// status as `code` and the response body as `message`. A failed task is
+/// not an error: read [`Task::error_info`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AgentsError {
-    #[error("HTTP request failed: {0}")]
+    #[error("HTTP request failed: {0}{}", timed_out_note(.0))]
     Http(#[from] reqwest::Error),
 
     #[error("HTTP {status}: {body}")]
@@ -25,9 +36,37 @@ pub enum AgentsError {
 
     #[error("invalid input: {0}")]
     InvalidInput(String),
+
+    /// A wait ran out before the task settled (`wait_for_task`,
+    /// `run_and_wait`, the fallback of `stream_task`). The task itself is
+    /// not affected: it may still be running on the server. Call
+    /// `wait_for_task(&task_id, ..)` again to keep waiting, or
+    /// `get_task(&task_id)` to read it.
+    #[error(
+        "task {task_id} still in status {last_status:?} after {waited:?}; the task may still be \
+         running on the server: call wait_for_task(\"{task_id}\", ..) to keep waiting, or \
+         get_task(\"{task_id}\") to read it"
+    )]
+    Timeout {
+        task_id: String,
+        /// The task's status at the last read.
+        last_status: TaskStatus,
+        /// The wait that ran out.
+        waited: std::time::Duration,
+    },
 }
 
 pub type AgentsResult<T> = std::result::Result<T, AgentsError>;
+
+/// reqwest's message for a stalled stream is "error decoding response
+/// body": say that it timed out.
+fn timed_out_note(e: &reqwest::Error) -> &'static str {
+    if e.is_timeout() {
+        " (timed out)"
+    } else {
+        ""
+    }
+}
 
 // ─── Wire types ───────────────────────────────────────────────────────
 
@@ -55,6 +94,12 @@ pub struct CreateAgentRequest {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// Inline workflow (the `AgentContractV2` JSON that
+    /// [`CreateRevisionRequest::custom_preset`] takes), validated by the
+    /// server at creation: the agent's first run already uses it, with no
+    /// `create_revision` call in between. Takes precedence over `preset`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_preset: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -83,9 +128,81 @@ pub struct AgentPagination {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentRunResponse {
     pub task_id: String,
+    /// The agent that ran. Empty for a task created by
+    /// [`crate::AgentsClient::resume_task`] (that response names no agent).
+    #[serde(default)]
     pub agent_id: String,
     pub status: String,
     pub created_at: u64,
+    /// Filled only when the run was requested with a wait
+    /// ([`RunOptions::wait`]): the task as it stood when the server
+    /// answered — settled, with its result and verification, if the run
+    /// finished within the wait.
+    #[serde(default)]
+    pub task: Option<Task>,
+    /// Set when the run was requested with [`RunOptions::auto_share`] and a
+    /// link was registered.
+    #[serde(default)]
+    pub share_id: Option<String>,
+    /// The public URL of the run, with `share_id`.
+    #[serde(default)]
+    pub share_url: Option<String>,
+}
+
+/// A sensible `timeout` for [`crate::AgentsClient::wait_for_task`] and
+/// [`crate::AgentsClient::run_and_wait`]. It covers ordinary runs, queueing
+/// and verification included; it is not a bound on how long the server may
+/// take. For a long run (many workflow states, tools, retries), pass a larger
+/// timeout, follow it with [`crate::AgentsClient::stream_task`], or give the
+/// run a `webhook_url`. When the wait runs out the task keeps running:
+/// [`AgentsError::Timeout`] carries its id, to wait again. Only the wait is
+/// long: each request inside it stays a [`LONG_POLL_SECS`] long poll.
+pub const DEFAULT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(360);
+
+/// Longest the server holds a request open for a wait, in seconds. Larger
+/// values are clamped server-side, not refused. Well under the client's own
+/// 120 s request timeout, so a held request never aborts on our side first.
+pub const MAX_WAIT_SECS: u64 = 50;
+
+/// Length of each long-poll request issued by `wait_for_task`. Kept under
+/// [`MAX_WAIT_SECS`] and well under the client timeout so a slow run still
+/// reports progress every half minute.
+pub const LONG_POLL_SECS: u64 = 30;
+
+/// Options for [`crate::AgentsClient::run_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    /// `"strict"`, `"balanced"` or `"permissive"` (the server default).
+    pub verification_mode: Option<String>,
+    /// `"lexical"` (the server default), `"hybrid"` or `"semantic"`.
+    pub fact_check_mode: Option<String>,
+    /// Hold the response until the run settles or this delay elapses
+    /// (clamped to [`MAX_WAIT_SECS`]). The task then comes back in
+    /// [`AgentRunResponse::task`].
+    pub wait: Option<std::time::Duration>,
+    /// The server POSTs the task record here when the run completes or
+    /// fails. A public http(s) URL: a private or internal destination is
+    /// refused with a 400.
+    pub webhook_url: Option<String>,
+    /// Retries of the run on the server (default 3, capped at 10) — not the
+    /// HTTP retries of this client ([`crate::AgentsClient::with_max_retries`]).
+    pub max_retries: Option<u32>,
+    /// Publish the run at creation: [`AgentRunResponse::share_url`] is then
+    /// set.
+    pub auto_share: Option<bool>,
+}
+
+/// `?wait=N` for a positive wait, the empty string otherwise. Rounded up: the
+/// server takes whole seconds, and asking for one more is better than
+/// returning before the caller's own deadline.
+pub(crate) fn wait_query(wait: Option<std::time::Duration>) -> String {
+    match wait {
+        Some(d) if !d.is_zero() => {
+            let secs = d.as_secs_f64().ceil() as u64;
+            format!("?wait={}", secs.clamp(1, MAX_WAIT_SECS))
+        }
+        _ => String::new(),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,9 +270,11 @@ pub struct ListRevisionsResponse {
 
 /// Result of [`super::AgentsClient::share_task`] / [`super::AgentsClient::unshare_task`].
 ///
-/// `expires_at` is epoch milliseconds, or `None` for paid tenants
-/// (no expiration). Free-tier shares default to a 30-day TTL ; once
-/// elapsed, the public `GET /v1/runs/<share_id>` returns 404.
+/// `expires_at` is epoch milliseconds: a share expires 30 days after it is
+/// published (`None` would mean no expiry; no plan has that today). Once
+/// elapsed, the public `GET /v1/runs/<share_id>` returns 404. The shared run
+/// stays available for as long as its link is valid: until `expires_at`,
+/// `unshare_task`, or the task's deletion.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ShareResponse {
     pub share_id: String,
@@ -166,28 +285,15 @@ pub struct ShareResponse {
 
 // ─── Tasks + verification types ──────────────────────────────────────
 
-/// Verification verdict returned on completed tasks. Matches the server's
-/// `wauldo-api::routes::tasks::types::TaskVerification.verdict` enum.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum Verdict {
-    Safe,
-    Uncertain,
-    Partial,
-    Block,
-    Conflict,
-    Unverified,
-    /// Fallback for server-side verdicts added after this SDK version.
-    #[serde(other)]
-    Unknown,
-}
-
 /// Task lifecycle status.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Queued,
     Running,
+    /// Waiting for a human approve/reject decision — nothing moves until
+    /// the caller acts.
+    PausedForApproval,
     Completed,
     Failed,
     Cancelled,
@@ -202,56 +308,12 @@ impl TaskStatus {
             TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
         )
     }
-}
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct TaskClaim {
-    pub text: String,
-    pub supported: bool,
-    pub confidence: f64,
-}
-
-/// Verification block attached to completed tasks.
-///
-/// When `verification_source == "prompt_only"`, `confidence` and
-/// `hallucination_rate` reflect self-consistency only — rely on
-/// `verdict` + [`support_score`](Self::support_score) + `message` as authoritative.
-///
-/// **Naming note:** the JSON wire field is `trust_score` (kept stable
-/// for backward compatibility). The public Rust method
-/// [`support_score`](Self::support_score) returns the same value under
-/// the public marketing name. New code should prefer that method.
-#[derive(Debug, Clone, Deserialize)]
-pub struct TaskVerification {
-    pub verdict: Verdict,
-    pub hallucination_rate: f64,
-    pub confidence: f64,
-    pub trust_score: f64,
-    pub verification_source: String,
-    #[serde(default)]
-    pub claims: Vec<TaskClaim>,
-    #[serde(default)]
-    pub verification_retries: u32,
-    /// Human-readable context for non-SAFE verdicts.
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub sources_cited: Vec<usize>,
-    #[serde(default)]
-    pub stripped_claims: Vec<String>,
-}
-
-impl TaskVerification {
-    /// Public name for [`trust_score`](Self::trust_score).
-    ///
-    /// Returns the fraction of claims (0-1) that are supported by the
-    /// provided sources. Identical to the `trust_score` field — the
-    /// JSON wire format keeps `trust_score` for backward compatibility,
-    /// but the public marketing name is *support score*. Prefer this
-    /// method in new code.
-    #[inline]
-    pub fn support_score(&self) -> f64 {
-        self.trust_score
+    /// True when nothing will change until the caller acts: the run is
+    /// over, or it is paused for approval. This is what the server's wait
+    /// waits for, and what `wait_for_task` returns on.
+    pub fn is_settled(self) -> bool {
+        self.is_terminal() || self == TaskStatus::PausedForApproval
     }
 }
 
@@ -259,6 +321,7 @@ impl TaskVerification {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Task {
     pub task_id: String,
+    /// Not sent by `GET /v1/tasks/:id`: empty unless the server adds it.
     #[serde(default)]
     pub tenant_id: String,
     pub status: TaskStatus,
@@ -280,11 +343,40 @@ pub struct Task {
     pub verification: Option<TaskVerification>,
     #[serde(default)]
     pub journal: Option<serde_json::Value>,
+    /// True when the run's stream withheld its output (injection detected):
+    /// the stream's terminal event carries [`WITHHELD_RESULT`] in place of
+    /// `result`. Absent on the wire (false) otherwise.
+    #[serde(default)]
+    pub output_withheld: bool,
+    /// Human decisions taken on the task (pause, approve, reject), oldest
+    /// first, with the reviewer's note when one was sent. Only the 20 most
+    /// recent are kept: past that, the oldest is dropped. Empty when none.
+    #[serde(default)]
+    pub decisions: Vec<super::hitl::TaskDecision>,
+    /// Id of the public share of the run, when it was published
+    /// (`auto_share` or `share_task`).
+    #[serde(default)]
+    pub share_id: Option<String>,
+    /// Public URL of the run, when it was published.
+    #[serde(default)]
+    pub share_url: Option<String>,
+    /// Outcome of a fact-check race, for runs that raced several models.
+    #[serde(default)]
+    pub race_result: Option<RaceResult>,
 }
+
+/// What the stream says in place of `result` when it withheld the run's
+/// output ([`Task::output_withheld`]).
+pub const WITHHELD_RESULT: &str = "Output withheld: injection detected";
 
 impl Task {
     pub fn is_done(&self) -> bool {
         self.status.is_terminal()
+    }
+
+    /// Done, or paused for approval: see [`TaskStatus::is_settled`].
+    pub fn is_settled(&self) -> bool {
+        self.status.is_settled()
     }
 }
 
@@ -314,6 +406,57 @@ pub struct StateTransition {
     pub repair_count: u32,
     #[serde(default)]
     pub cache_hit: bool,
+}
+
+/// State names of the stream's last event, one per terminal status (exact
+/// names, not a prefix: a workflow state may be called anything).
+pub const TERMINAL_STATE_NAMES: [&str; 3] = ["TASK_COMPLETED", "TASK_FAILED", "TASK_CANCELLED"];
+
+/// `condition` of the stream's last event: `"terminal"` when the run ends on
+/// the stream, `"Already finished"` when it was over at subscription.
+pub const TERMINAL_CONDITIONS: [&str; 2] = ["terminal", "Already finished"];
+
+/// `state_name` of the notice the server sends when the stream fell behind
+/// the run. Not a workflow state and not terminal: the run goes on and the
+/// terminal event still comes. `validation_notes` says how many transitions
+/// were skipped; the ones after it are withheld (their `condition` says so) up
+/// to the terminal event, and the task record (`get_task`) holds the full run.
+pub const STREAM_LAGGED: &str = "STREAM_LAGGED";
+
+/// What the stream's terminal event carries: the same fields as
+/// `GET /v1/tasks/:id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalPayload {
+    pub task_id: String,
+    pub status: TaskStatus,
+    #[serde(default)]
+    pub result: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub verification: Option<TaskVerification>,
+}
+
+impl StateTransition {
+    /// True for the stream's last event (`TASK_COMPLETED`, `TASK_FAILED`,
+    /// `TASK_CANCELLED`): the run is over and [`Self::terminal_payload`]
+    /// holds its result, so there is nothing left to fetch. Exact names and a
+    /// terminal `condition`: a workflow state may be called anything,
+    /// `TASK_COMPLETED` included.
+    pub fn is_terminal(&self) -> bool {
+        self.to_state.is_none()
+            && TERMINAL_STATE_NAMES.contains(&self.state_name.as_str())
+            && TERMINAL_CONDITIONS.contains(&self.condition.as_str())
+    }
+
+    /// The terminal event's content; `None` on an ordinary transition, or
+    /// when the server withheld it.
+    pub fn terminal_payload(&self) -> Option<TerminalPayload> {
+        if !self.is_terminal() || self.raw_output.is_empty() {
+            return None;
+        }
+        serde_json::from_str(&self.raw_output).ok()
+    }
 }
 
 // ─── Shared helper: bounded body reader ───────────────────────────────

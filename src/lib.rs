@@ -36,12 +36,13 @@ mod retry;
 mod sse_parser;
 mod transport;
 mod types;
+pub mod upload_file;
 
 // Wauldo Deploy — standalone clients for /v1/agents, /v1/memory,
 // /v1/a2a. Keep separate from HttpClient so they don't depend on
 // Guard/http_types which are undergoing pre-existing modifications.
 pub mod agents;
-// Funnel #1 — audit log (read + export + RTBF). Same standalone shape
+// Audit history (read + export + right to be forgotten). Same standalone shape
 // as memory and agents — no coupling to HttpClient.
 pub mod history;
 pub mod memory;
@@ -56,14 +57,22 @@ pub use http_config::HttpConfig;
 pub use http_types::*;
 pub use mock_client::MockHttpClient;
 pub use types::*;
+pub use upload_file::{
+    DocumentQuality, UploadFileOptions, UploadFileResponse, MAX_UPLOAD_FILE_SIZE,
+};
 
 // Re-export the deployed-agents + tasks surface so callers can
 // `use wauldo::AgentsClient;` without reaching into `wauldo::agents`.
 pub use agents::{
-    AgentListResponse, AgentPagination, AgentRevision, AgentRunResponse, AgentsClient, AgentsError,
-    AgentsResult, CreateAgentRequest, CreateRevisionRequest, CreateRevisionResponse, DeployedAgent,
-    ListRevisionsResponse, StateTransition, Task, TaskClaim, TaskStatus, TaskVerification,
-    UpdateAgentRequest, Verdict,
+    A2aResponse, AgentListResponse, AgentPagination, AgentRevision, AgentRunResponse, AgentsClient,
+    AgentsError, AgentsResult, ContractAttestation, ContractVerdict, ContractViolation,
+    CreateAgentRequest, CreateRevisionRequest, CreateRevisionResponse, DeployedAgent, HitlResponse,
+    HonestySignals, ListRevisionsResponse, RaceCandidate, RaceResult, RunOptions, ShareResponse,
+    StateTransition, Task, TaskClaim, TaskDecision, TaskErrorInfo, TaskStatus, TaskVerification,
+    TerminalPayload, UpdateAgentRequest, Verdict, ALREADY_FINISHED_CONDITION, DEFAULT_WAIT_TIMEOUT,
+    LONG_POLL_SECS, MAX_HITL_REASON_CHARS, MAX_WAIT_SECS, PAUSED_EXPIRED_ERROR, RETRY_STATUSES,
+    RETRY_STATUSES_IDEMPOTENT, STREAM_FALLBACK_TIMEOUT, STREAM_IDLE_TIMEOUT, STREAM_LAGGED,
+    TERMINAL_CONDITIONS, TERMINAL_STATE_NAMES, WITHHELD_RESULT,
 };
 
 // Re-export the workflows surface so callers can

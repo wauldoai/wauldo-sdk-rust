@@ -1,8 +1,8 @@
-//! History API client — Wauldo Funnel #1 audit log.
+//! History API client: list, export and erase a tenant's task audit log.
 //!
 //! Read-only access to a tenant's task history (every completed task is
-//! persisted to a tenant-scoped DynamoDB audit log on the server side,
-//! exposed via `/v1/history`). Mirrors [`MemoryClient`] shape so a caller
+//! persisted to a tenant-scoped audit log on the server side, exposed via
+//! `/v1/history`). Mirrors [`MemoryClient`](crate::memory::MemoryClient) shape so a caller
 //! already familiar with the Memory API has zero ramp-up.
 //!
 //! Three formats:
@@ -65,8 +65,8 @@ pub struct TaskHistoryEntry {
 
 /// Server response for `GET /v1/history`.
 ///
-/// `enabled = false` signals the server hasn't wired its DynamoDB store
-/// (self-host without IAM perm). `items` is empty + `enabled = true`
+/// `enabled = false` signals the server has no audit store configured
+/// (a self-hosted server can run without one). `items` is empty + `enabled = true`
 /// means the window simply has no events for this tenant yet.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HistoryListResponse {

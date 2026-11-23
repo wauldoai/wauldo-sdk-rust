@@ -5,6 +5,35 @@ use wauldo::{
 };
 
 // ============================================================================
+// Crate root re-exports of the agents surface
+// ============================================================================
+
+/// What `wauldo::agents` exports is reachable from the crate root too, the
+/// HITL and wait items included.
+#[test]
+fn test_agents_surface_is_reexported_at_the_root() {
+    assert_eq!(
+        wauldo::DEFAULT_WAIT_TIMEOUT,
+        wauldo::agents::DEFAULT_WAIT_TIMEOUT
+    );
+    assert_eq!(
+        wauldo::PAUSED_EXPIRED_ERROR,
+        wauldo::agents::PAUSED_EXPIRED_ERROR
+    );
+    let hitl: wauldo::HitlResponse = serde_json::from_value(serde_json::json!({
+        "task_id": "t1",
+        "previous_status": "running",
+        "new_status": "paused_for_approval",
+    }))
+    .expect("HitlResponse");
+    assert_eq!(hitl.new_status, wauldo::TaskStatus::PausedForApproval);
+    let decision: wauldo::TaskDecision =
+        serde_json::from_value(serde_json::json!({ "action": "pause", "at": 1 }))
+            .expect("TaskDecision");
+    assert_eq!(decision.action, "pause");
+}
+
+// ============================================================================
 // Client Initialization Tests
 // ============================================================================
 

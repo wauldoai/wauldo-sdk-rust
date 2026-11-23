@@ -244,7 +244,7 @@ impl WorkflowsClient {
 
     /// `PATCH /v1/workflows/:id` — replace the workflow definition in place.
     ///
-    /// Body shape is identical to [`create`] (`CreateWorkflowRequest`). The
+    /// Body shape is identical to [`create`](Self::create) (`CreateWorkflowRequest`). The
     /// server keeps the workflow id, tenant_id, and created_at ; refreshes
     /// name/description/start_at/states ; bumps updated_at and the monotonic
     /// version int. Same validations as create — cycles, transition targets,

@@ -1,6 +1,7 @@
 //! SSE stream parser for chat completion streaming
 
 use crate::error::{Error, Result};
+use crate::http_config::STREAM_IDLE_TIMEOUT;
 use crate::http_types::ChatChunk;
 use tokio::sync::mpsc;
 
@@ -22,12 +23,26 @@ pub async fn parse_sse_stream(
             }
             Err(e) => {
                 // Best-effort send; receiver may already be dropped
-                let _ = tx.send(Err(Error::connection(e.to_string()))).await;
-                return Err(Error::connection(e.to_string()));
+                let _ = tx.send(Err(read_error(&e))).await;
+                return Err(read_error(&e));
             }
         }
     }
     Ok(())
+}
+
+/// A failed read of the stream. A timeout is the idle timeout: the stream
+/// has none in total, so it means the server went silent.
+fn read_error(e: &reqwest::Error) -> Error {
+    if e.is_timeout() {
+        Error::Timeout(format!(
+            "no data on the stream for {}s, not even a keep-alive: {}",
+            STREAM_IDLE_TIMEOUT.as_secs(),
+            e
+        ))
+    } else {
+        Error::connection(e.to_string())
+    }
 }
 
 /// An in-band stream error: `data: {"error": {"message": ..., "type": ...}}`,

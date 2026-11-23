@@ -199,6 +199,17 @@ pub struct RagQueryRequest {
     pub quality_mode: Option<String>,
 }
 
+/// Options for [`crate::HttpClient::rag_query_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct RagQueryOptions {
+    /// Number of sources to retrieve; `None`: the server default (5).
+    pub top_k: Option<usize>,
+    /// Return the retrieval funnel details (`debug_info`).
+    pub debug: bool,
+    /// `"fast"`, `"balanced"` or `"premium"`; `None`: the server default.
+    pub quality_mode: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RagQueryResponse {
     pub answer: String,
